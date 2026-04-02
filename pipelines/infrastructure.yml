@@ -1,0 +1,13 @@
+trigger:
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - terraform/devops/infrastructure/**
+
+stages:
+  - template: pipelines/template.yml
+    parameters:
+      environmentName: 'production'
+      terraformModule: 'infrastructure'

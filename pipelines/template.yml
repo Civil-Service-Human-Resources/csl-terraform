@@ -1,0 +1,85 @@
+parameters:
+  - name: terraformModule
+  - type: string
+  - name: environmentName
+    type: string
+
+stages:
+  - stage: Validate_${{ parameters.terraformModule }}
+    displayName: "Validate [${{ parameters.terraformModule }}]"
+    jobs:
+      - job: Syntax_and_Security
+        steps:
+          - task: TerraformInstaller@1
+            inputs:
+              terraformVersion: 'latest'
+
+          - task: TerraformTaskV4@4
+            displayName: 'Init'
+            inputs:
+              provider: 'azurerm'
+              command: 'init'
+              backendServiceArm: 'PrincipalConnectionProduction'
+              backendAzureRmResourceGroupName: 'lpgterraform'
+              backendAzureRmStorageAccountName: 'lpgterraformsecure'
+              backendAzureRmContainerName: 'tfstatesecure'
+              backendAzureRmKey: '${{ parameters.terraformModule }}.terraform.tfstate'
+  - stage: Plan_${{ parameters.terraformModule }}
+    displayName: "Plan [${{ parameters.terraformModule }}]"
+    dependsOn: Validate_${{ parameters.terraformModule }}
+    condition: succeeded()
+    jobs:
+      - job: Plan
+        steps:
+          - task: TerraformInstaller@1
+            inputs:
+              terraformVersion: ${{ parameters.terraformVersion }}
+
+          - task: TerraformTaskV4@4
+            displayName: 'Terraform Init'
+            inputs:
+              provider: 'azurerm'
+              command: 'init'
+              backendServiceArm: 'PrincipalConnectionProduction'
+              backendAzureRmResourceGroupName: 'lpgterraform'
+              backendAzureRmStorageAccountName: 'lpgterraformsecure'
+              backendAzureRmContainerName: 'tfstatesecure'
+              backendAzureRmKey: '${{ parameters.terraformModule }}.terraform.tfstate'
+
+          - task: TerraformTaskV4@4
+            name: TerraformPlan
+            displayName: 'Terraform Plan'
+            inputs:
+              provider: 'azurerm'
+              command: 'plan'
+              environmentServiceNameAzureRM: 'PrincipalConnectionProduction'
+              commandOptions: '-out=$(Build.ArtifactStagingDirectory)/${{ parameters.terraformModule }}.tfplan'
+
+          - publish: $(Build.ArtifactStagingDirectory)/${{ parameters.terraformModule }}.tfplan
+            artifact: ${{ parameters.terraformModule }}-plan
+
+  - stage: Apply_${{ parameters.terraformModule }}
+    displayName: "Apply [${{ parameters.terraformModule }}]"
+    dependsOn: Plan_${{ parameters.terraformModule }}
+    condition: |
+      and(
+        succeeded(),
+        eq(dependencies.Plan_${{ parameters.terraformModule }}.outputs['Plan_${{ parameters.terraformModule }}.TerraformPlan.changesPresent'], 'true')
+      )
+    jobs:
+      - deployment: Apply
+        environment: ${{ parameters.environmentName }}
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - download: current
+                  artifact: ${{ parameters.terraformModule }}-plan
+
+                - task: TerraformTaskV4@4
+                  displayName: 'Terraform Apply'
+                  inputs:
+                    provider: 'azurerm'
+                    command: 'apply'
+                    environmentServiceNameAzureRM: 'PrincipalConnectionProduction'
+                    commandOptions: '$(Pipeline.Workspace)/${{ parameters.terraformModule }}-plan/${{ parameters.terraformModule }}.tfplan'
